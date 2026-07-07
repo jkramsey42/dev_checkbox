@@ -117,6 +117,11 @@ def build_row(data, access_code=""):
     location_in_state = find_where_in_state(data)
     selected_program = find_selected_program(data)
 
+    foster_care_type = clean(data.get(
+        "Do you participate in adult or youth foster care?",
+        ""
+    ))
+
     row = [
         submitted_at,
         numeric_id,
@@ -124,6 +129,7 @@ def build_row(data, access_code=""):
         state,
         location_in_state,
         selected_program,
+        foster_care_type
         
     ]
 
