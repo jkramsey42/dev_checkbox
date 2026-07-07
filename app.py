@@ -103,7 +103,7 @@ def find_where_in_state(data):
 
     return ""
 
-def build_row(data):
+def build_row(data, access_code=""):
     """
     Build one output row.
 
@@ -112,11 +112,6 @@ def build_row(data):
 
     submitted_at = datetime.now(timezone.utc).isoformat()
     
-    access_code = clean(data.get(
-    "Please enter your access code. This should be a string of 6 - 8 letters.",
-    ""
-    ))
-
     numeric_id = clean(data.get("NumericId", ""))
     state = clean(data.get("Where do you receive services?", ""))
     location_in_state = find_where_in_state(data)
@@ -134,7 +129,7 @@ def build_row(data):
 
     return row
 
-    return row
+
 
 
 @app.route("/", methods=["GET"])
