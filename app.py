@@ -72,6 +72,36 @@ def clean(value):
 
     return str(value).strip()
 
+def find_selected_program(data):
+    """
+    Finds a true field like:
+    'In which program do you participate?_Community Services_Column2_1': true
+
+    Returns:
+    'Community Services'
+    """
+    prefix = "In which program do you participate?_"
+    suffix = "_Column2_1"
+
+    for key, value in data.items():
+        if key.startswith(prefix) and key.endswith(suffix) and value is True:
+            program = key[len(prefix):-len(suffix)]
+            return clean(program)
+
+    return ""
+
+def find_where_in_state(data):
+    """
+    Finds a key like:
+    'Where in Arizona do you receive services?'
+    'Where in Texas do you receive services?'
+    'Where in Florida do you receive services?'
+    """
+    for key, value in data.items():
+        if key.startswith("Where in ") and key.endswith(" do you receive services?"):
+            return clean(value)
+
+    return ""
 
 def build_row(data):
     """
@@ -81,29 +111,28 @@ def build_row(data):
     """
 
     submitted_at = datetime.now(timezone.utc).isoformat()
+    
+    access_code = clean(data.get(
+    "Please enter your access code. This should be a string of 6 - 8 letters.",
+    ""
+    ))
 
-    # Example direct fields.
-    # Replace these with the actual Checkbox variable names.
-    response_id = clean(data.get("response_id"))
-    first_name = clean(data.get("first_name"))
-    last_name = clean(data.get("last_name"))
-    email = clean(data.get("email"))
-
-    # Example survey variables.
-    q1 = clean(data.get("q1"))
-    q2 = clean(data.get("q2"))
-    q3 = clean(data.get("q3"))
+    numeric_id = clean(data.get("NumericId", ""))
+    state = clean(data.get("Where do you receive services?", ""))
+    location_in_state = find_where_in_state(data)
+    selected_program = find_selected_program(data)
 
     row = [
         submitted_at,
-        response_id,
-        first_name,
-        last_name,
-        email,
-        q1,
-        q2,
-        q3,
+        numeric_id,
+        access_code,
+        state,
+        location_in_state,
+        selected_program,
+        
     ]
+
+    return row
 
     return row
 
@@ -124,7 +153,17 @@ def checkbox_webhook():
         print("Incoming Checkbox payload:")
         print(json.dumps(data, indent=2, ensure_ascii=False))
 
-        row = build_row(data)
+        access_code = (
+            clean(request.args.get("access_code", ""))
+            or clean(data.get(
+                "Please enter your access code. This should be a string of 6 - 8 letters.",
+                ""
+            ))
+        )
+
+        print("Access code from URL:", access_code)
+        
+        row = build_row(data, access_code)
 
         print("Row being written:")
         print(row)
