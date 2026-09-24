@@ -191,6 +191,107 @@ def checkbox_webhook():
             "message": str(e)
         }), 500
 
+# --- New code 9/24 --- 
+CES_HEADERS = [
+    "timestamp", "user ID", "ps", "pscode_manual", "state_name",
+    "loc_AZ", "loc_CA", "loc_CT", "loc_FL", "loc_GA", "loc_MR",
+    "loc_NJ", "loc_NY", "loc_PA", "loc_PC", "loc_PP", "loc_TC", "loc_PS",
+]
+
+# These describe the response, rather than answers to survey items.
+CES_METADATA = {
+    "WebhookPayloadId", "Timestamp", "CurrentPageId",
+    "TotalTimeInSeconds", "Score", "ProgressCurrentPageNumber",
+    "ProgressTotalPageCount", "Id", "NumericId", "SurveyId",
+    "Status", "Language", "Started", "LastEdit", "Ended",
+    "IpAddress", "IsTest", "ContactId", "AnonymousRespondentId",
+    "Invitee", "IsAnonymized", "ImportBatchId",
+}
+
+def ces_value(data, key):
+    value = data.get(key, "")
+    return "" if value is None else str(value).strip()
+
+def ces_has_answer(data):
+    return any(
+        key not in CES_METADATA
+        and key != "ps"  # Calculated field; don't count it as an answer.
+        and value is not None
+        and str(value).strip() != ""
+        for key, value in data.items()
+    )
+
+def get_ces_worksheet():
+    credentials = Credentials.from_service_account_file(
+        GOOGLE_APPLICATION_CREDENTIALS,
+        scopes=SCOPES,
+    )
+    client = gspread.authorize(credentials)
+    return client.open_by_key(
+        os.environ["CES_SPREADSHEET_ID"]
+    ).worksheet("FY27C_single")
+
+@app.route("/webhook-ces", methods=["POST"])
+def ces_webhook():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+
+    if str(data.get("SurveyId", "")) != "2366":
+        return jsonify({"error": "Unexpected survey"}), 400
+
+    numeric_id = ces_value(data, "NumericId")
+    if not numeric_id:
+        return jsonify({"error": "Missing NumericId"}), 400
+
+    if not ces_has_answer(data):
+        return jsonify({"status": "ignored", "reason": "No answers yet"}), 200
+
+    worksheet = get_ces_worksheet()
+    if worksheet.row_values(1)[:18] != CES_HEADERS:
+        return jsonify({"error": "FY27C_single headers do not match"}), 500
+
+    # Find this response's existing row, regardless of its status.
+    ids = worksheet.col_values(2)
+    matches = [
+        row_number
+        for row_number, value in enumerate(ids, start=1)
+        if row_number > 1 and value == numeric_id
+    ]
+    if len(matches) > 1:
+        return jsonify({"error": "Duplicate NumericId in sheet"}), 500
+
+    row_number = matches[0] if matches else None
+    row = (
+        (worksheet.row_values(row_number) + [""] * 18)[:18]
+        if row_number else [""] * 18
+    )
+
+    # Update fields present in this payload; preserve earlier answers
+    # when a later partial payload omits those fields.
+    sources = [
+        "Timestamp", "NumericId", "ps", "pscode_manual", "state_name",
+        "loc_AZ", "loc_CA", "loc_CT", "loc_FL_OLD", "loc_GA",
+        "loc_MR", "loc_NJ", "loc_NY", "loc_PA", "loc_PC",
+        "loc_PP", "loc_TC", "loc_PS",
+    ]
+    for index, source in enumerate(sources):
+        if source in data:
+            row[index] = ces_value(data, source)
+
+    if row_number:
+        worksheet.update(
+            range_name=f"A{row_number}:R{row_number}",
+            values=[row],
+            value_input_option="RAW",
+        )
+        action = "updated"
+    else:
+        worksheet.append_row(row, value_input_option="RAW")
+        action = "added"
+
+    return jsonify({"status": action, "numeric_id": numeric_id}), 200
+# --- end new code ---
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
