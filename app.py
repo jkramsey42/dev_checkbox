@@ -449,27 +449,30 @@ def fms_has_answer(data):
 @app.route("/webhook-fms", methods=["POST"])
 def fms_webhook():
     data = request.get_json(silent=True)
-        answered_keys = [
-            key for key, value in data.items()
-            if key not in CES_METADATA
-            and value is not None
-            and value is not False
-            and str(value).strip()
-        ]
-    print(
-        "FMS CHECK: "
-        + json.dumps({
-            "status": data.get("Status"),
-            "answered_keys": answered_keys,
-            "ps_in_webhook_url": bool(request.args.get("access_code", "").strip()),
-        }),
-        flush=True,
-    )
     if not isinstance(data, dict):
         return jsonify({"error": "Expected a JSON object"}), 400
 
     if str(data.get("SurveyId", "")) != "2365":
         return jsonify({"error": "Unexpected survey"}), 400
+
+    answered_keys = [
+        key for key, value in data.items()
+        if key not in CES_METADATA
+        and value is not None
+        and value is not False
+        and str(value).strip()
+    ]
+    print(
+        "FMS CHECK: "
+        + json.dumps({
+            "status": data.get("Status"),
+            "answered_keys": answered_keys,
+            "ps_in_webhook_url": bool(
+                request.args.get("access_code", "").strip()
+            ),
+        }),
+        flush=True,
+    )
 
     numeric_id = ces_value(data, "NumericId")
     if not numeric_id:
