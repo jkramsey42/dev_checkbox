@@ -215,7 +215,7 @@ def ces_value(data, key):
 def ces_has_answer(data):
     return any(
         key not in CES_METADATA
-        and key != "ps"  # Calculated field; don't count it as an answer.
+        and key != "ps"  # Hidden field; don't count it as an answer.
         and value is not None
         and str(value).strip() != ""
         for key, value in data.items()
@@ -279,6 +279,12 @@ def ces_webhook():
         if source in data:
             row[index] = ces_value(data, source)
 
+    # Checkbox may pass the hidden ps value in the webhook URL
+    # rather than in the JSON payload.
+    url_access_code = request.args.get("access_code", "").strip()
+    if not row[2] and url_access_code:
+        row[2] = url_access_code
+
     if row_number:
         worksheet.update(
             range_name=f"A{row_number}:R{row_number}",
@@ -290,12 +296,6 @@ def ces_webhook():
         worksheet.append_row(row, value_input_option="RAW")
         action = "added"
 
-     # Checkbox may pass the hidden ps value in the webhook URL
-     # rather than in the JSON payload.
-     url_access_code = request.args.get("access_code", "").strip()
-     if not row[2] and url_access_code:
-         row[2] = url_access_code
-    
     return jsonify({"status": action, "numeric_id": numeric_id}), 200
 # --- end new code ---
 
