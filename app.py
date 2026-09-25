@@ -411,28 +411,100 @@ def ces_multi_webhook():
         "added": len(new_rows),
         "removed": len(stale_rows),
     }), 200
-@app.route("/inspect-fms", methods=["POST"])
-def inspect_fms():
+    
+FMS_HEADERS = [
+    "timestamp", "user ID", "accesscode", "state",
+    "AZ_loc", "CA_loc", "CT_loc", "FL_loc", "GA_loc",
+    "MR_loc", "NJ_loc", "NY_loc", "PAA_loc", "PAC_loc",
+    "PAPL_loc", "PAPO_loc", "PAS_loc", "PAT_loc", "ps",
+]
+
+FMS_SOURCES = [
+    "Timestamp", "NumericId", "accesscode", "state_loc",
+    "AZ_loc", "CA_loc", "CT_loc", "FL_loc", "GA_loc",
+    "MR_loc", "NJ_loc", "NY_loc", "PAA_loc", "PAC_loc",
+    "PAPL_loc", "PAPO_loc", "PAS_loc", "PAT_loc",
+]
+
+def get_fms_worksheet():
+    credentials = Credentials.from_service_account_file(
+        GOOGLE_APPLICATION_CREDENTIALS,
+        scopes=SCOPES,
+    )
+    client = gspread.authorize(credentials)
+    return client.open_by_key(
+        os.environ["CES_SPREADSHEET_ID"]
+    ).worksheet("FY27F")
+
+def fms_has_answer(data):
+    for key, value in data.items():
+        if key in CES_METADATA or key in ("ps", "qcode"):
+            continue
+        if value is None or value is False:
+            continue
+        if str(value).strip():
+            return True
+    return False
+
+@app.route("/webhook-fms", methods=["POST"])
+def fms_webhook():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
-        return jsonify({"error": "Expected JSON"}), 400
+        return jsonify({"error": "Expected a JSON object"}), 400
 
-    location_keys = [
-        "AZ_loc", "CA_loc", "CT_loc", "FL_loc", "GA_loc",
-        "MR_loc", "NJ_loc", "NY_loc", "PAA_loc", "PAC_loc",
-        "PAPL_loc", "PAPO_loc", "PAS_loc", "PAT_loc",
+    if str(data.get("SurveyId", "")) != "2365":
+        return jsonify({"error": "Unexpected survey"}), 400
+
+    numeric_id = ces_value(data, "NumericId")
+    if not numeric_id:
+        return jsonify({"error": "Missing NumericId"}), 400
+
+    if not fms_has_answer(data):
+        return jsonify({"status": "ignored", "reason": "No answers yet"}), 200
+
+    worksheet = get_fms_worksheet()
+    if worksheet.row_values(1)[:19] != FMS_HEADERS:
+        return jsonify({"error": "FY27F headers do not match"}), 500
+
+    ids = worksheet.col_values(2)
+    matches = [
+        row_number
+        for row_number, value in enumerate(ids, start=1)
+        if row_number > 1 and value == numeric_id
     ]
-    relevant = {
-        key: value
-        for key, value in data.items()
-        if key == "state_loc" or key in location_keys
-    }
-    print("FMS SURVEY ID: " + str(data.get("SurveyId")), flush=True)
-    print(
-        "FMS FIELD SHAPE: " + json.dumps(relevant, ensure_ascii=False),
-        flush=True,
+    if len(matches) > 1:
+        return jsonify({"error": "Duplicate NumericId in FY27F"}), 500
+
+    row_number = matches[0] if matches else None
+    row = (
+        (worksheet.row_values(row_number) + [""] * 19)[:19]
+        if row_number else [""] * 19
     )
-    return jsonify({"status": "received"}), 200
+
+    # Keep earlier values when a partial payload omits their keys.
+    for index, source in enumerate(FMS_SOURCES):
+        if source in data:
+            row[index] = ces_value(data, source)
+
+    # Hidden ps may arrive through the webhook URL instead of JSON.
+    ps_from_url = request.args.get("access_code", "").strip()
+    if "ps" in data and ces_value(data, "ps"):
+        row[18] = ces_value(data, "ps")
+    elif ps_from_url:
+        row[18] = ps_from_url
+
+    if row_number:
+        worksheet.update(
+            range_name=f"A{row_number}:S{row_number}",
+            values=[row],
+            value_input_option="RAW",
+        )
+        action = "updated"
+    else:
+        worksheet.append_row(row, value_input_option="RAW")
+        action = "added"
+
+    return jsonify({"status": action, "numeric_id": numeric_id}), 200
 # --- end new code ---
 
 if __name__ == "__main__":
