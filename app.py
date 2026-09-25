@@ -297,6 +297,30 @@ def ces_webhook():
         action = "added"
 
     return jsonify({"status": action, "numeric_id": numeric_id}), 200
+
+@app.route("/inspect-ces-multi", methods=["POST"])
+def inspect_ces_multi():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected JSON"}), 400
+
+    relevant = {
+        key: value
+        for key, value in data.items()
+        if (
+            "CT_site" in key
+            or "MR_site" in key
+            or "Connecticut: In which programs" in key
+            or "Massachusetts / Rhode Island: In which programs" in key
+        )
+    }
+    print(
+        "MULTI FIELD SHAPE: " + json.dumps(relevant, ensure_ascii=False),
+        flush=True,
+    )
+    print("MULTI SURVEY ID: " + str(data.get("SurveyId")), flush=True)
+    return jsonify({"status": "received"}), 200
+
 # --- end new code ---
 
 if __name__ == "__main__":
