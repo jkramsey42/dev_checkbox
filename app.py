@@ -298,28 +298,119 @@ def ces_webhook():
 
     return jsonify({"status": action, "numeric_id": numeric_id}), 200
 
-@app.route("/inspect-ces-multi", methods=["POST"])
-def inspect_ces_multi():
+@app.route("/webhook-ces-multi", methods=["POST"])
+def ces_multi_webhook():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
-        return jsonify({"error": "Expected JSON"}), 400
+        return jsonify({"error": "Expected a JSON object"}), 400
 
-    relevant = {
-        key: value
-        for key, value in data.items()
-        if (
-            "CT_site" in key
-            or "MR_site" in key
-            or "Connecticut: In which programs" in key
-            or "Massachusetts / Rhode Island: In which programs" in key
-        )
+    if str(data.get("SurveyId", "")) != "2369":
+        return jsonify({"error": "Unexpected survey"}), 400
+
+    numeric_id = ces_value(data, "NumericId")
+    if not numeric_id:
+        return jsonify({"error": "Missing NumericId"}), 400
+
+    prefixes = {
+        "CT": "CT_site_",
+        "MR": "MR_site_",
     }
-    print(
-        "MULTI FIELD SHAPE: " + json.dumps(relevant, ensure_ascii=False),
-        flush=True,
+    groups_present = {
+        group
+        for group, prefix in prefixes.items()
+        if any(key.startswith(prefix) for key in data)
+    }
+    if not groups_present:
+        return jsonify({"status": "ignored", "reason": "No site fields"}), 200
+
+    # Each selected alias gets its own row.
+    selected = []
+    for group, prefix in prefixes.items():
+        for key, value in data.items():
+            if key.startswith(prefix) and value is True:
+                alias = key[len(prefix):]
+                if alias:
+                    selected.append((group, alias))
+
+    worksheet = get_ces_worksheet()
+    if worksheet.row_values(1)[:18] != CES_HEADERS:
+        return jsonify({"error": "FY27C_single headers do not match"}), 500
+
+    sheet_rows = worksheet.get_all_values()
+    existing = {}
+    previous_ps = ""
+
+    for row_number, values in enumerate(sheet_rows[1:], start=2):
+        row = (values + [""] * 18)[:18]
+        if row[1] != numeric_id:
+            continue
+
+        # Selection rows have an alias in H or K.
+        if row[7].startswith("CT"):
+            identity = ("CT", row[7])
+        elif row[10].startswith("MR"):
+            identity = ("MR", row[10])
+        else:
+            continue
+
+        if identity in existing:
+            return jsonify({"error": "Duplicate selection row"}), 500
+
+        existing[identity] = row_number
+        previous_ps = previous_ps or row[2]
+
+    ps = (
+        ces_value(data, "ps")
+        or request.args.get("access_code", "").strip()
+        or previous_ps
     )
-    print("MULTI SURVEY ID: " + str(data.get("SurveyId")), flush=True)
-    return jsonify({"status": "received"}), 200
+    timestamp = ces_value(data, "Timestamp")
+
+    def make_row(group, alias):
+        row = [""] * 18
+        row[0] = timestamp
+        row[1] = numeric_id
+        row[2] = ps
+        row[7 if group == "CT" else 10] = alias
+        return row
+
+    selected_set = set(selected)
+
+    # Refresh rows for choices that are still selected.
+    for identity in selected:
+        if identity in existing:
+            row_number = existing[identity]
+            worksheet.update(
+                range_name=f"A{row_number}:R{row_number}",
+                values=[make_row(*identity)],
+                value_input_option="RAW",
+            )
+
+    # If a respondent unchecks a choice, remove its old row.
+    # Delete from the bottom so earlier row numbers do not move.
+    stale_rows = [
+        row_number
+        for identity, row_number in existing.items()
+        if identity[0] in groups_present and identity not in selected_set
+    ]
+    for row_number in sorted(stale_rows, reverse=True):
+        worksheet.delete_rows(row_number)
+
+    # Append newly selected choices after the existing data.
+    new_rows = [
+        make_row(*identity)
+        for identity in selected
+        if identity not in existing
+    ]
+    if new_rows:
+        worksheet.append_rows(new_rows, value_input_option="RAW")
+
+    return jsonify({
+        "status": "success",
+        "selected": len(selected),
+        "added": len(new_rows),
+        "removed": len(stale_rows),
+    }), 200
 
 # --- end new code ---
 
