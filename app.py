@@ -411,7 +411,28 @@ def ces_multi_webhook():
         "added": len(new_rows),
         "removed": len(stale_rows),
     }), 200
+@app.route("/inspect-fms", methods=["POST"])
+def inspect_fms():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected JSON"}), 400
 
+    location_keys = [
+        "AZ_loc", "CA_loc", "CT_loc", "FL_loc", "GA_loc",
+        "MR_loc", "NJ_loc", "NY_loc", "PAA_loc", "PAC_loc",
+        "PAPL_loc", "PAPO_loc", "PAS_loc", "PAT_loc",
+    ]
+    relevant = {
+        key: value
+        for key, value in data.items()
+        if key == "state_loc" or key in location_keys
+    }
+    print("FMS SURVEY ID: " + str(data.get("SurveyId")), flush=True)
+    print(
+        "FMS FIELD SHAPE: " + json.dumps(relevant, ensure_ascii=False),
+        flush=True,
+    )
+    return jsonify({"status": "received"}), 200
 # --- end new code ---
 
 if __name__ == "__main__":
