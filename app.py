@@ -524,7 +524,26 @@ def fms_webhook():
         action = "added"
 
     return jsonify({"status": action, "numeric_id": numeric_id}), 200
-# --- end new code ---
+# --- new code 9/30 ---
+
+@app.route("/inspect-fms-multi", methods=["POST"])
+def inspect_fms_multi():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected JSON"}), 400
+
+    relevant = {
+        key: value
+        for key, value in data.items()
+        if key.startswith(("CT_site_", "MR_site_"))
+    }
+    print("FMS MULTI SURVEY ID: " + str(data.get("SurveyId")), flush=True)
+    print(
+        "FMS MULTI FIELDS: " + json.dumps(relevant, ensure_ascii=False),
+        flush=True,
+    )
+    return jsonify({"status": "received"}), 200
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
