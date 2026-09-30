@@ -555,10 +555,16 @@ def fms_multi_webhook():
     for group, prefix in prefixes.items():
         for key, value in data.items():
             if key.startswith(prefix) and value is True:
+
                 alias = key[len(prefix):].strip()
+
+                # CTCTGHSUCRS -> CTGHSUCRS; leave CTGHSUCRS unchanged.
+                if alias.startswith(group + group):
+                    alias = alias[len(group):]
+
                 if alias:
                     selected.append((group, alias))
-
+    
     worksheet = get_fms_worksheet()
     if worksheet.row_values(1)[:19] != FMS_HEADERS:
         return jsonify({"error": "FY27F headers do not match"}), 500
