@@ -526,23 +526,119 @@ def fms_webhook():
     return jsonify({"status": action, "numeric_id": numeric_id}), 200
 # --- new code 9/30 ---
 
-@app.route("/inspect-fms-multi", methods=["POST"])
-def inspect_fms_multi():
+@app.route("/webhook-fms-multi", methods=["POST"])
+def fms_multi_webhook():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
-        return jsonify({"error": "Expected JSON"}), 400
+        return jsonify({"error": "Expected a JSON object"}), 400
 
-    relevant = {
-        key: value
-        for key, value in data.items()
-        if key.startswith(("CT_site_", "MR_site_"))
+    if str(data.get("SurveyId", "")) != "2380":
+        return jsonify({"error": "Unexpected survey"}), 400
+
+    numeric_id = ces_value(data, "NumericId")
+    if not numeric_id:
+        return jsonify({"error": "Missing NumericId"}), 400
+
+    prefixes = {
+        "CT": "CT_site_",
+        "MR": "MR_site_",
     }
-    print("FMS MULTI SURVEY ID: " + str(data.get("SurveyId")), flush=True)
-    print(
-        "FMS MULTI FIELDS: " + json.dumps(relevant, ensure_ascii=False),
-        flush=True,
+    groups_present = {
+        group
+        for group, prefix in prefixes.items()
+        if any(key.startswith(prefix) for key in data)
+    }
+    if not groups_present:
+        return jsonify({"status": "ignored", "reason": "No site fields"}), 200
+
+    selected = []
+    for group, prefix in prefixes.items():
+        for key, value in data.items():
+            if key.startswith(prefix) and value is True:
+                alias = key[len(prefix):].strip()
+                if alias:
+                    selected.append((group, alias))
+
+    worksheet = get_fms_worksheet()
+    if worksheet.row_values(1)[:19] != FMS_HEADERS:
+        return jsonify({"error": "FY27F headers do not match"}), 500
+
+    existing = {}
+    previous_ps = ""
+
+    for row_number, values in enumerate(
+        worksheet.get_all_values()[1:], start=2
+    ):
+        row = (values + [""] * 19)[:19]
+        if row[1] != numeric_id:
+            continue
+
+        # CT_loc is column G; MR_loc is column J.
+        if row[6].startswith("CT"):
+            identity = ("CT", row[6])
+        elif row[9].startswith("MR"):
+            identity = ("MR", row[9])
+        else:
+            continue
+
+        if identity in existing:
+            return jsonify({"error": "Duplicate program row"}), 500
+
+        existing[identity] = row_number
+        previous_ps = previous_ps or row[18]
+
+    ps = (
+        ces_value(data, "ps")
+        or request.args.get("access_code", "").strip()
+        or previous_ps
     )
-    return jsonify({"status": "received"}), 200
+    timestamp = ces_value(data, "Timestamp")
+
+    def make_row(group, alias):
+        row = [""] * 19
+        row[0] = timestamp
+        row[1] = numeric_id
+        row[3] = group
+        row[6 if group == "CT" else 9] = alias
+        row[18] = ps
+        return row
+
+    selected_set = set(selected)
+
+    # Update programs already recorded for this response.
+    for identity in selected:
+        if identity in existing:
+            row_number = existing[identity]
+            worksheet.update(
+                range_name=f"A{row_number}:S{row_number}",
+                values=[make_row(*identity)],
+                value_input_option="RAW",
+            )
+
+    # Remove choices explicitly deselected in this payload.
+    # An omitted question does not remove its earlier selections.
+    stale_rows = [
+        row_number
+        for identity, row_number in existing.items()
+        if identity[0] in groups_present and identity not in selected_set
+    ]
+    for row_number in sorted(stale_rows, reverse=True):
+        worksheet.delete_rows(row_number)
+
+    new_rows = [
+        make_row(*identity)
+        for identity in selected
+        if identity not in existing
+    ]
+    if new_rows:
+        worksheet.append_rows(new_rows, value_input_option="RAW")
+
+    return jsonify({
+        "status": "success",
+        "selected": len(selected),
+        "added": len(new_rows),
+        "removed": len(stale_rows),
+    }), 200
 
 
 if __name__ == "__main__":
